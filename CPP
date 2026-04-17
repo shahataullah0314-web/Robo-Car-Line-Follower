@@ -1,0 +1,126 @@
+#include <Arduino.h>
+#define IR1 A0
+#define IR2 A1
+#define IR3 A2
+#define IR4 A3
+#define IR5 A4
+#define ENA  9
+#define IN1  6
+#define IN2  7
+#define ENB 10
+#define IN3  8
+#define IN4  4
+float Kp = 11.0;    
+float Ki = 0.0;
+float Kd = 15.0;    
+int baseSpeed   = 190;  // Slightly lower base for better stability
+int maxSpeed    = 210;
+int minSpeed    = -190; // ALLOWS REVERSE WHEEL FOR 90 DEGREE SNAPPING
+int pivotSpeed  = 180;  // Speed used when line is completely lost
+float prevError = 0;
+float lastError = 0;
+bool debugMode  = false; // Set to true to see Serial Monitor
+void driveMotors(int leftSpeed, int rightSpeed);
+void pivotRight();
+void pivotLeft();
+void runPID(int s1, int s2, int s3, int s4, int s5);
+bool lineDetected(int s1, int s2, int s3, int s4, int s5);
+void setup() {
+  Serial.begin(9600);
+    TCCR1B = TCCR1B & 0b11111000 | 0x01;
+  pinMode(IR1, INPUT); pinMode(IR2, INPUT); pinMode(IR3, INPUT);
+  pinMode(IR4, INPUT); pinMode(IR5, INPUT);
+  pinMode(ENA, OUTPUT); pinMode(ENB, OUTPUT);
+  pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(LED_BUILTIN, HIGH); delay(100);
+    digitalWrite(LED_BUILTIN, LOW);  delay(100);
+  }
+  delay(1000);
+}
+void loop() {
+  int s1 = digitalRead(IR1);
+  int s2 = digitalRead(IR2);
+  int s3 = digitalRead(IR3);
+  int s4 = digitalRead(IR4);
+  int s5 = digitalRead(IR5);
+  if (!lineDetected(s1, s2, s3, s4, s5)) {
+    // SECONDARY METHOD: Instant Memory-Based Pivot
+    // If lastError was negative, the line was on the left.
+    if (lastError < 0) {
+      pivotLeft();
+    } else {
+      pivotRight();
+    }
+  } 
+  else {
+    // NORMAL PID FOLLOWING
+    runPID(s1, s2, s3, s4, s5);
+  }
+}
+
+// Check if any sensor sees the line (assuming 0 = Black line, 1 = White background)
+bool lineDetected(int s1, int s2, int s3, int s4, int s5) {
+  return (s1 == 0 || s2 == 0 || s3 == 0 || s4 == 0 || s5 == 0);
+}
+
+void runPID(int s1, int s2, int s3, int s4, int s5) {
+  // Convert sensors to 0 (white) and 1 (black) for math
+  int v1 = 1 - s1; int v2 = 1 - s2; int v3 = 1 - s3; int v4 = 1 - s4; int v5 = 1 - s5;
+
+  // Weighted Sum: Outer sensors given more weight (5) for 90 degree detection
+  float weightedSum = (-5 * v1) + (-2 * v2) + (0 * v3) + (2 * v4) + (5 * v5);
+  int sensorsOnLine = v1 + v2 + v3 + v4 + v5;
+
+  float error = 0;
+  if (sensorsOnLine > 0) {
+    error = weightedSum / sensorsOnLine;
+    lastError = error; // Update memory of where line was
+  }
+
+  float derivative = error - prevError;
+  float correction = (Kp * error) + (Kd * derivative);
+  prevError = error;
+
+  int leftSpeed  = constrain(baseSpeed + (int)correction, minSpeed, maxSpeed);
+  int rightSpeed = constrain(baseSpeed - (int)correction, minSpeed, maxSpeed);
+
+  driveMotors(leftSpeed, rightSpeed);
+}
+
+void driveMotors(int left, int right) {
+  // Left Motor
+  if (left >= 0) {
+    digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+  } else {
+    digitalWrite(IN1, LOW);  digitalWrite(IN2, HIGH);
+    left = -left;
+  }
+
+  // Right Motor
+  if (right >= 0) {
+    digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
+  } else {
+    digitalWrite(IN3, LOW);  digitalWrite(IN4, HIGH);
+    right = -right;
+  }
+
+  analogWrite(ENA, left);
+  analogWrite(ENB, right);
+}
+
+void pivotRight() {
+  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);  // Left Forward
+  digitalWrite(IN3, LOW);  digitalWrite(IN4, HIGH); // Right Backward
+  analogWrite(ENA, pivotSpeed);
+  analogWrite(ENB, pivotSpeed);
+}
+
+void pivotLeft() {
+  digitalWrite(IN1, LOW);  digitalWrite(IN2, HIGH); // Left Backward
+  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);  // Right Forward
+  analogWrite(ENA, pivotSpeed);
+  analogWrite(ENB, pivotSpeed);
+}
